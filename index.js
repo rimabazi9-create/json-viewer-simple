@@ -5,62 +5,66 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { ethers } from 'ethers';
 
-// تهيئة البيئة
 dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-
-// ============================================
-// 1. MIDDLEWARE
-// ============================================
 app.use(express.json());
 
-// ============================================
-// 2. إعدادات Alchemy و Blockchain
-// ============================================
+// ===== متغيرات البيئة =====
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY;
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const SOURCE_WALLET = process.env.SOURCE_WALLET || "0x16eD6dCdC283FCEc179272fFb9d6F2C4Dd178984";
-const RECEIVER_WALLET = process.env.RECEIVER_WALLET || "0xBA19eF26007d129BfB9063aCD9c400f9aCf054C7";
-const USDT_CONTRACT = "0xdAC17F958D2ee523a2206206994597C13D831ec7";
+const RECEIVER_WALLET = process.env.RECEIVER_WALLET || "0x17eEB294d4c0E17B05B3357a335FEEB549e784FB";
+const USDT_CONTRACT = process.env.USDT_CONTRACT || "0xdAC17F958D2ee523a2206206994597C13D831ec7";
 
-// إنشاء Provider و Wallet
 let provider, wallet;
 if (ALCHEMY_API_KEY) {
     provider = new ethers.JsonRpcProvider(`https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}`);
     if (PRIVATE_KEY) {
         wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+        console.log(`✅ المحفظة المرسلة: ${wallet.address}`);
+    } else {
+        console.log('⚠️ PRIVATE_KEY غير موجود، يمكنك فقط قراءة البيانات.');
     }
+} else {
+    console.log('❌ ALCHEMY_API_KEY غير موجود.');
 }
 
-// ============================================
-// 3. المسار الرئيسي: عرض بيانات JSON
-// ============================================
-app.get('/', (req, res) => {
+// ===== قراءة ملف JSON =====
+function getTransactionData() {
     try {
         const filePath = path.join(__dirname, 'transaction_data.json');
         const data = fs.readFileSync(filePath, 'utf8');
-        const jsonData = JSON.parse(data);
+        return JSON.parse(data);
+    } catch {
+        return null;
+    }
+}
+
+// ===== المسار الرئيسي =====
+app.get('/', (req, res) => {
+    const data = getTransactionData();
+    if (data) {
+        res.json({ status: 'success', message: '✅ بيانات المعاملة', data });
+    } else {
         res.json({
             status: 'success',
-            message: '✅ JSON Viewer is working with real data',
-            data: jsonData
-        });
-    } catch (err) {
-        res.status(500).json({
-            status: 'error',
-            message: 'File not found or invalid JSON',
-            details: err.message
+            message: '✅ JSON Viewer يعمل (بيانات تجريبية)',
+            note: 'يرجى رفع transaction_data.json',
+            config: {
+                sourceWallet: SOURCE_WALLET,
+                receiverWallet: RECEIVER_WALLET,
+                alchemyConfigured: !!ALCHEMY_API_KEY,
+                walletConfigured: !!PRIVATE_KEY
+            }
         });
     }
 });
 
-// ============================================
-// 4. مسار عرض معلومات التكوين
-// ============================================
+// ===== معلومات التكوين =====
 app.get('/config', (req, res) => {
     res.json({
         sourceWallet: SOURCE_WALLET,
@@ -71,21 +75,14 @@ app.get('/config', (req, res) => {
     });
 });
 
-// ============================================
-// 5. مسار قراءة رصيد المحفظة (USDT و ETH)
-// ============================================
+// ===== رصيد المحفظة =====
 app.get('/balance/:address?', async (req, res) => {
     try {
-        if (!provider) {
-            return res.status(400).json({ error: 'Alchemy API Key not configured' });
-        }
-        
+        if (!provider) return res.status(400).json({ error: 'Alchemy not configured' });
         const address = req.params.address || SOURCE_WALLET;
-        
-        // رصيد ETH
+        if (!ethers.isAddress(address)) return res.status(400).json({ error: 'Invalid address' });
+
         const ethBalance = await provider.getBalance(address);
-        
-        // رصيد USDT
         const usdtAbi = [
             "function balanceOf(address) view returns (uint256)",
             "function decimals() view returns (uint8)"
@@ -93,7 +90,7 @@ app.get('/balance/:address?', async (req, res) => {
         const usdt = new ethers.Contract(USDT_CONTRACT, usdtAbi, provider);
         const decimals = await usdt.decimals();
         const usdtBalance = await usdt.balanceOf(address);
-        
+
         res.json({
             address,
             eth: ethers.formatEther(ethBalance),
@@ -105,84 +102,68 @@ app.get('/balance/:address?', async (req, res) => {
     }
 });
 
-// ============================================
-// 6. مسار تحويل USDT (Wallet-to-Wallet)
-// ============================================
+// ===== تحويل USDT (مع تأكيد) =====
 app.post('/transfer', async (req, res) => {
     try {
-        const { to, amount, from } = req.body;
-        
-        if (!wallet) {
-            return res.status(400).json({ error: 'Wallet not configured (missing PRIVATE_KEY)' });
-        }
-        
-        if (!to || !amount) {
-            return res.status(400).json({ error: 'Missing required fields: to, amount' });
-        }
-        
-        // التحقق من صحة العنوان
-        if (!ethers.isAddress(to)) {
-            return res.status(400).json({ error: 'Invalid recipient address' });
-        }
-        
-        // إنشاء واجهة USDT
+        const { to, amount, confirm } = req.body;
+        if (!to || !amount) return res.status(400).json({ error: 'Missing to or amount' });
+        if (!ethers.isAddress(to)) return res.status(400).json({ error: 'Invalid address' });
+        if (!wallet) return res.status(400).json({ error: 'PRIVATE_KEY not configured' });
+        if (confirm !== 'YES') return res.status(400).json({ error: 'Please set confirm: "YES"' });
+
         const usdtAbi = [
             "function transfer(address to, uint256 amount) returns (bool)",
-            "function decimals() view returns (uint8)"
+            "function decimals() view returns (uint8)",
+            "function balanceOf(address) view returns (uint256)"
         ];
         const usdt = new ethers.Contract(USDT_CONTRACT, usdtAbi, wallet);
         const decimals = await usdt.decimals();
-        
-        // تحويل المبلغ إلى أصغر وحدة
+        const balance = await usdt.balanceOf(wallet.address);
         const amountInWei = ethers.parseUnits(amount.toString(), decimals);
-        
-        console.log(`📤 Initiating transfer of ${amount} USDT to ${to}`);
-        
-        // إرسال المعاملة
+        if (amountInWei.gt(balance)) {
+            return res.status(400).json({ error: 'Insufficient balance', balance: ethers.formatUnits(balance, decimals) });
+        }
+
+        console.log(`📤 إرسال ${amount} USDT إلى ${to}`);
         const tx = await usdt.transfer(to, amountInWei);
-        console.log(`📨 Transaction hash: ${tx.hash}`);
-        
-        // انتظار التأكيد (اختياري)
+        console.log(`📨 هاش: ${tx.hash}`);
         const receipt = await tx.wait();
-        
+
         res.json({
             status: 'success',
-            message: 'Transfer initiated successfully',
             txHash: tx.hash,
             blockNumber: receipt.blockNumber,
-            gasUsed: receipt.gasUsed.toString(),
             from: wallet.address,
-            to: to,
-            amount: amount
+            to,
+            amount,
+            explorerUrl: `https://etherscan.io/tx/${tx.hash}`
         });
     } catch (err) {
-        console.error('❌ Transfer error:', err);
-        res.status(500).json({
-            status: 'error',
-            message: err.message,
-            details: err.code || 'Unknown error'
-        });
+        res.status(500).json({ error: err.message });
     }
 });
 
-// ============================================
-// 7. مسار اختبار (للتحقق من التطبيق)
-// ============================================
-app.get('/health', (req, res) => {
+// ===== مسار محاكاة (للتدريب) =====
+app.post('/simulate-transfer', (req, res) => {
+    const { to, amount } = req.body;
     res.json({
-        status: 'healthy',
-        timestamp: new Date().toISOString(),
-        version: '1.0.0'
+        status: 'simulation',
+        message: 'هذه محاكاة للتحويل (للتدريب فقط)',
+        from: SOURCE_WALLET,
+        to: to || RECEIVER_WALLET,
+        amount: amount || '0',
+        note: 'لتنفيذ تحويل حقيقي، استخدم /transfer مع confirm: "YES"'
     });
 });
 
-// ============================================
-// 8. تشغيل الخادم
-// ============================================
+// ===== التحقق من الصحة =====
+app.get('/health', (req, res) => res.json({ status: 'healthy', timestamp: new Date().toISOString() }));
+
+// ===== تشغيل الخادم =====
 app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`📌 Source Wallet: ${SOURCE_WALLET}`);
-    console.log(`📌 Receiver Wallet: ${RECEIVER_WALLET}`);
-    console.log(`🔑 Alchemy: ${ALCHEMY_API_KEY ? '✅ Configured' : '❌ Not configured'}`);
-    console.log(`🔑 Private Key: ${PRIVATE_KEY ? '✅ Configured' : '❌ Not configured'}`);
+    console.log(`📌 SOURCE_WALLET: ${SOURCE_WALLET}`);
+    console.log(`📌 RECEIVER_WALLET: ${RECEIVER_WALLET}`);
+    console.log(`🔑 Alchemy: ${ALCHEMY_API_KEY ? '✅' : '❌'}`);
+    console.log(`🔑 Private Key: ${PRIVATE_KEY ? '✅' : '❌'}`);
 });
