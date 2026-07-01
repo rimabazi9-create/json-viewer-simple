@@ -7,7 +7,6 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 app.use(express.json());
 
-// ===== ملف 1B =====
 const MASTER_WALLET = "0xFB941E800617DBE10d56fC9f425fc744b9892297";
 const RECEIVER_WALLET = "0x17eEB294d4c0E17B05B3357a335FEEB549e784FB";
 const USDT_CONTRACT = "0xdAC17F958D2ee523a2206206994597C13D831ec7";
