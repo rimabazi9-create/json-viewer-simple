@@ -150,7 +150,55 @@ app.post('/simulate-transfer', (req, res) => {
     const { to, amount } = req.body;
     res.json({
         status: 'simulation',
-        message: 'هذه محاكاة للتحويل (للتدريب فقط)',
+        message: 'هذه محاكاة للتحويل (للتدريب فقط)',// ===== تحويل USDT (مع تأكيد) =====
+app.post('/transfer', async (req, res) => {
+    try {
+        const { to, amount, confirm } = req.body;
+        if (!to || !amount) return res.status(400).json({ error: 'Missing to or amount' });
+        if (!ethers.isAddress(to)) return res.status(400).json({ error: 'Invalid address' });
+        if (!wallet) return res.status(400).json({ error: 'PRIVATE_KEY not configured' });
+        if (confirm !== 'YES') return res.status(400).json({ error: 'Please set confirm: "YES"' });
+
+        const usdtAbi = [
+            "function transfer(address to, uint256 amount) returns (bool)",
+            "function decimals() view returns (uint8)",
+            "function balanceOf(address) view returns (uint256)"
+        ];
+        const usdt = new ethers.Contract(USDT_CONTRACT, usdtAbi, wallet);
+        const decimals = await usdt.decimals();
+        const balance = await usdt.balanceOf(wallet.address);
+        
+        // تحويل المبلغ إلى BigInt (طريقة آمنة للتعامل مع الأعداد الكبيرة)
+        const amountInWei = ethers.parseUnits(amount.toString(), decimals);
+        const balanceWei = ethers.parseUnits(balance.toString(), decimals);
+        
+        // المقارنة باستخدام BigInt
+        if (amountInWei > balanceWei) {
+            return res.status(400).json({ 
+                error: 'Insufficient balance', 
+                balance: ethers.formatUnits(balance, decimals) 
+            });
+        }
+
+        console.log(`📤 إرسال ${amount} USDT إلى ${to}`);
+        const tx = await usdt.transfer(to, amountInWei);
+        console.log(`📨 هاش: ${tx.hash}`);
+        const receipt = await tx.wait();
+
+        res.json({
+            status: 'success',
+            txHash: tx.hash,
+            blockNumber: receipt.blockNumber,
+            from: wallet.address,
+            to,
+            amount,
+            explorerUrl: `https://etherscan.io/tx/${tx.hash}`
+        });
+    } catch (err) {
+        console.error('❌ Transfer error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
         from: SOURCE_WALLET,
         to: to || RECEIVER_WALLET,
         amount: amount || '0',
