@@ -1,3 +1,5 @@
+console.log('🔍 PRIVATE_KEY موجود؟', !!process.env.PRIVATE_KEY);
+console.log('🔍 طول المفتاح:', process.env.PRIVATE_KEY?.length || 0);
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
