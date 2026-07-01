@@ -40,7 +40,28 @@ const txData = loadAndLogTransactionData();
 // ============================================================
 function extractKeys(data) {
     if (!data) return null;
+function extractKeys(data) {
+    if (!data) return null;
 
+    // البحث عن المحفظة المصدر في أماكن مختلفة
+    const masterWallet = data?.transaction?.swift_core_details?.master_wallet ||
+                         data?.transaction?.swift_core_details?.sender_iban ||
+                         data?.master_wallet ||
+                         data?.wallet?.master ||
+                         data?.receiver?.master_wallet ||
+                         process.env.SOURCE_WALLET ||
+                         "0xFB941E800617DBE10d56fC9f425fc744b9892297";
+
+    const receiverWallet = data?.transaction?.swift_core_details?.receiver_wallet ||
+                           data?.transaction?.swift_core_details?.receiver_account_number ||
+                           data?.receiver_wallet ||
+                           data?.wallet?.receiver ||
+                           process.env.RECEIVER_WALLET ||
+                           "0xE0d80E84Ee93e00A302f9dbe607a7C5ff97dbc0e";
+
+    // باقي المفاتيح...
+    return { masterWallet, receiverWallet, ... };
+}
     // محاولة استخراج المفاتيح من أماكنها المختلفة في الـ JSON
     const masterWallet = data?.transaction?.swift_core_details?.sender_iban ||
                          data?.transaction?.sender_iban ||
