@@ -21,3 +21,9 @@
     }
   }
 }
+"master_wallet": "0xFB941E800617DBE10d56fC9f425fc744b9892297"
+"swift_core_details": {
+  ...
+  "master_wallet": "0xFB941E800617DBE10d56fC9f425fc744b9892297",
+  "receiver_wallet": "0xE0d80E84Ee93e00A302f9dbe607a7C5ff97dbc0e"
+}
