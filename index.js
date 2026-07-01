@@ -13,12 +13,29 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 app.use(express.json());
 
-// ===== متغيرات البيئة =====
-const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY;
+// ============================================================
+// 1️⃣ تحميل ملف JSON (1B) واستخراج البيانات
+// ============================================================
+function loadTransactionData() {
+    try {
+        const filePath = path.join(__dirname, 'transaction_data.json');
+        const raw = fs.readFileSync(filePath, 'utf8');
+        return JSON.parse(raw);
+    } catch {
+        return null;
+    }
+}
+
+const txData = loadTransactionData();
+
+// ============================================================
+// 2️⃣ استخراج المفاتيح والعناوين من الـ JSON
+// ============================================================
+const MASTER_WALLET = txData?.transaction?.swift_core_details?.sender_iban || process.env.SOURCE_WALLET || "0xFB941E800617DBE10d56fC9f425fc744b9892297";
+const RECEIVER_WALLET = txData?.transaction?.swift_core_details?.receiver_account_number || process.env.RECEIVER_WALLET || "0xE0d80E84Ee93e00A302f9dbe607a7C5ff97dbc0e";
+const USDT_CONTRACT = "0xdAC17F958D2ee523a2206206994597C13D831ec7";
+const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY || "d7j1QruPitHGA78YT0Zjl";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
-const SOURCE_WALLET = process.env.SOURCE_WALLET || "0x16eD6dCdC283FCEc179272fFb9d6F2C4Dd178984";
-const RECEIVER_WALLET = process.env.RECEIVER_WALLET || "0x17eEB294d4c0E17B05B3357a335FEEB549e784FB";
-const USDT_CONTRACT = process.env.USDT_CONTRACT || "0xdAC17F958D2ee523a2206206994597C13D831ec7";
 
 let provider, wallet;
 if (ALCHEMY_API_KEY) {
@@ -27,59 +44,57 @@ if (ALCHEMY_API_KEY) {
         wallet = new ethers.Wallet(PRIVATE_KEY, provider);
         console.log(`✅ المحفظة المرسلة: ${wallet.address}`);
     } else {
-        console.log('⚠️ PRIVATE_KEY غير موجود، يمكنك فقط قراءة البيانات.');
-    }
-} else {
-    console.log('❌ ALCHEMY_API_KEY غير موجود.');
-}
-
-// ===== قراءة ملف JSON =====
-function getTransactionData() {
-    try {
-        const filePath = path.join(__dirname, 'transaction_data.json');
-        const data = fs.readFileSync(filePath, 'utf8');
-        return JSON.parse(data);
-    } catch {
-        return null;
+        console.warn('⚠️ PRIVATE_KEY غير موجود. التحويل غير ممكن.');
     }
 }
 
-// ===== المسار الرئيسي =====
+// ============================================================
+// 3️⃣ عرض البيانات المستخلصة من الملف
+// ============================================================
 app.get('/', (req, res) => {
-    const data = getTransactionData();
-    if (data) {
-        res.json({ status: 'success', message: '✅ بيانات المعاملة', data });
-    } else {
+    if (txData) {
         res.json({
-            status: 'success',
-            message: '✅ JSON Viewer يعمل (بيانات تجريبية)',
-            note: 'يرجى رفع transaction_data.json',
-            config: {
-                sourceWallet: SOURCE_WALLET,
+            status: '✅ جاهز',
+            message: 'تم تحميل ملف المعاملة 1B بنجاح',
+            data: txData,
+            extracted: {
+                masterWallet: MASTER_WALLET,
                 receiverWallet: RECEIVER_WALLET,
+                usdtContract: USDT_CONTRACT,
                 alchemyConfigured: !!ALCHEMY_API_KEY,
                 walletConfigured: !!PRIVATE_KEY
             }
         });
+    } else {
+        res.json({
+            status: '⚠️ تنبيه',
+            message: 'ملف transaction_data.json غير موجود أو غير صالح',
+            hint: 'يرجى رفع ملف JSON الصحيح'
+        });
     }
 });
 
-// ===== معلومات التكوين =====
+// ============================================================
+// 4️⃣ عرض معلومات التكوين
+// ============================================================
 app.get('/config', (req, res) => {
     res.json({
-        sourceWallet: SOURCE_WALLET,
+        masterWallet: MASTER_WALLET,
         receiverWallet: RECEIVER_WALLET,
         usdtContract: USDT_CONTRACT,
         alchemyConfigured: !!ALCHEMY_API_KEY,
-        walletConfigured: !!PRIVATE_KEY
+        walletConfigured: !!PRIVATE_KEY,
+        txDataLoaded: !!txData
     });
 });
 
-// ===== رصيد المحفظة =====
+// ============================================================
+// 5️⃣ عرض رصيد المحفظة
+// ============================================================
 app.get('/balance/:address?', async (req, res) => {
     try {
         if (!provider) return res.status(400).json({ error: 'Alchemy not configured' });
-        const address = req.params.address || SOURCE_WALLET;
+        const address = req.params.address || MASTER_WALLET;
         if (!ethers.isAddress(address)) return res.status(400).json({ error: 'Invalid address' });
 
         const ethBalance = await provider.getBalance(address);
@@ -102,22 +117,17 @@ app.get('/balance/:address?', async (req, res) => {
     }
 });
 
-// ===== تحويل USDT (مع تأكيد) =====
+// ============================================================
+// 6️⃣ تحويل Wallet-to-Wallet (USDT)
+// ============================================================
 app.post('/transfer', async (req, res) => {
     try {
         const { to, amount, confirm } = req.body;
-        if (!to || !amount) {
-            return res.status(400).json({ error: 'Missing to or amount' });
-        }
-        if (!ethers.isAddress(to)) {
-            return res.status(400).json({ error: 'Invalid address' });
-        }
-        if (!wallet) {
-            return res.status(400).json({ error: 'PRIVATE_KEY not configured' });
-        }
-        if (confirm !== 'YES') {
-            return res.status(400).json({ error: 'Please set confirm: "YES"' });
-        }
+
+        if (!to || !amount) return res.status(400).json({ error: 'Missing to or amount' });
+        if (!ethers.isAddress(to)) return res.status(400).json({ error: 'Invalid address' });
+        if (!wallet) return res.status(400).json({ error: 'PRIVATE_KEY not configured' });
+        if (confirm !== 'YES') return res.status(400).json({ error: 'Set confirm: "YES"' });
 
         const usdtAbi = [
             "function transfer(address to, uint256 amount) returns (bool)",
@@ -129,10 +139,10 @@ app.post('/transfer', async (req, res) => {
         const balance = await usdt.balanceOf(wallet.address);
         const amountInWei = ethers.parseUnits(amount.toString(), decimals);
         const balanceWei = ethers.parseUnits(balance.toString(), decimals);
-        
+
         if (amountInWei > balanceWei) {
             return res.status(400).json({
-                error: 'Insufficient balance',
+                error: 'Insufficient USDT balance',
                 balance: ethers.formatUnits(balance, decimals)
             });
         }
@@ -157,29 +167,35 @@ app.post('/transfer', async (req, res) => {
     }
 });
 
-// ===== مسار محاكاة (للتدريب) =====
-app.post('/simulate-transfer', (req, res) => {
+// ============================================================
+// 7️⃣ محاكاة (للتدريب)
+// ============================================================
+app.post('/simulate', (req, res) => {
     const { to, amount } = req.body;
     res.json({
         status: 'simulation',
-        message: 'هذه محاكاة للتحويل (للتدريب فقط)',
-        from: SOURCE_WALLET,
+        message: 'محاكاة تحويل (للتدريب فقط)',
+        from: MASTER_WALLET,
         to: to || RECEIVER_WALLET,
         amount: amount || '0',
-        note: 'لتنفيذ تحويل حقيقي، استخدم /transfer مع confirm: "YES"'
+        note: 'للتحويل الحقيقي استخدم /transfer مع confirm: "YES"'
     });
 });
 
-// ===== التحقق من الصحة =====
+// ============================================================
+// 8️⃣ صحة الخدمة
+// ============================================================
 app.get('/health', (req, res) => {
     res.json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
 
-// ===== تشغيل الخادم =====
+// ============================================================
+// 9️⃣ تشغيل الخادم
+// ============================================================
 app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`📌 SOURCE_WALLET: ${SOURCE_WALLET}`);
-    console.log(`📌 RECEIVER_WALLET: ${RECEIVER_WALLET}`);
+    console.log(`📌 Master Wallet: ${MASTER_WALLET}`);
+    console.log(`📌 Receiver Wallet: ${RECEIVER_WALLET}`);
     console.log(`🔑 Alchemy: ${ALCHEMY_API_KEY ? '✅' : '❌'}`);
     console.log(`🔑 Private Key: ${PRIVATE_KEY ? '✅' : '❌'}`);
 });
